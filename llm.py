@@ -59,8 +59,8 @@ class TransformerBlock(nn.Module):
             num_heads=num_heads, embedding_dim=emb_dim, block_size=self.block_size
         )
 
-        self.ln1 = nn.LayerNorm(normalized_shape=emb_dim)
-        self.ln2 = nn.LayerNorm(normalized_shape=emb_dim)
+        self.ln1 = nn.RMSNorm(normalized_shape=emb_dim)
+        self.ln2 = nn.RMSNorm(normalized_shape=emb_dim)
 
         self.mlp_scale_factor = 4
 
