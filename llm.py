@@ -3,6 +3,31 @@ from torch import nn
 import math
 
 
+class AbsolutePositionalEmbedding(nn.Module):
+    def __init__(self, d_model=64, max_seq_len=1024):
+        super().__init__()
+        self.pe = torch.zeros(max_seq_len, d_model)
+
+        pos = torch.arange(0, max_seq_len, dtype=torch.float).unsqueeze(1)
+
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
+        )
+
+        self.pe[:, 0::2] = torch.sin(pos * div_term)
+        self.pe[:, 1::2] = torch.cos(pos * div_term)
+
+        self.pe = self.pe.unsqueeze(0)
+
+        self.register_buffer("PE", self.pe)
+        self.PE: torch.Tensor
+
+    def forward(self, x):
+        seq_len = x.size(1)
+        x = x + self.PE[:, :seq_len, :]
+        return x
+
+
 class SelfAttention(nn.Module):
     def __init__(self, num_heads=4, embedding_dim=64, block_size=1024):
         super().__init__()
@@ -24,13 +49,13 @@ class SelfAttention(nn.Module):
             name="mask",
             tensor=torch.tril(
                 input=torch.ones(self.block_size, self.block_size, dtype=torch.bool)
-            )
+            ),
         )
         self.mask: torch.Tensor
 
     def forward(self, x):
         B, T, C = x.size()
-        mask= self.mask[:T, :T].unsqueeze(0).unsqueeze(0)
+        mask = self.mask[:T, :T].unsqueeze(0).unsqueeze(0)
         x_1 = self.qkv_proj(x)
         Q, K, V = x_1.chunk(self.num_tensor_groups, dim=-1)
 
@@ -39,7 +64,7 @@ class SelfAttention(nn.Module):
         V = V.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
 
         attn_scores = Q @ K.transpose(-1, -2) / math.sqrt(self.head_dim)
-        attn_scores = attn_scores.masked_fill(~mask, float("-inf"))
+        attn_scores.masked_fill_(~mask, float("-inf"))
 
         soft_scores = torch.softmax(attn_scores, dim=-1)
         qkv_scores = soft_scores @ V
@@ -99,8 +124,8 @@ class DummyLLM(nn.Module):
         self.token_emb = nn.Embedding(
             num_embeddings=self.vocab_size, embedding_dim=self.embedding_dim
         )
-        self.pos_emb = nn.Embedding(
-            num_embeddings=self.block_size, embedding_dim=self.embedding_dim
+        self.pos_emb = AbsolutePositionalEmbedding(
+            d_model=self.embedding_dim, max_seq_len=self.block_size
         )
         self.network = nn.Sequential(
             *[
@@ -113,14 +138,13 @@ class DummyLLM(nn.Module):
                 for _ in range(self.num_T_blocks)
             ]
         )
-        self.final_layer = nn.Linear(self.embedding_dim, self.block_size)
+        self.final_layer = nn.Linear(self.embedding_dim, self.vocab_size, bias=False)
+        self.final_layer.weight = self.token_emb.weight
 
     def forward(self, x):
         B, T = x.size()
-        pos = torch.arange(end=T, device=x.device)
         token_emb = self.token_emb(x)
-        pos_emb = self.pos_emb(pos)
-        x_in = token_emb + pos_emb
+        x_in = self.pos_emb(token_emb)
         x_temp = self.network(x_in)
         x_out = self.final_layer(x_temp)
         return x_out
